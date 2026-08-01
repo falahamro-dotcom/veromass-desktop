@@ -5,6 +5,12 @@
   "windows": [
     "main"
   ],
+  "remote": {
+    "urls": [
+      "https://app.veromass.com/*",
+      "http://localhost:5173/*"
+    ]
+  },
   "permissions": [
     "core:default"
   ]

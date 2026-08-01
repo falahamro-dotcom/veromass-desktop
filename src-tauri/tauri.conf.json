@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "VeroMass Desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "com.veromass.desktop",
   "build": {
     "frontendDist": "../../moleculeid-web/dist",
@@ -15,7 +15,8 @@
         "width": 1440,
         "height": 900,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "url": "https://app.veromass.com"
       }
     ],
     "security": {
