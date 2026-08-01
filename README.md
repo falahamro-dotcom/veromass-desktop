@@ -1,9 +1,14 @@
 # VeroMass Desktop
 
 Tauri shell wrapping the real `moleculeid-web` app (same codebase as
-app.veromass.com — login, Library, Workbench, everything) plus five local
-processing tools launched as sidecar processes: VeroMass Aligner, MoleculeID
-Processor, VOLTA, MGF Extractor, Phyto CrossMatcher.
+app.veromass.com — login, Library, Workbench, everything) plus four local
+processing tools launched as sidecar processes — genuine separate OS
+processes, full native speed, no different from running them standalone:
+VeroMass Aligner, MoleculeID Processor, MGF Extractor, Phyto CrossMatcher.
+
+VOLTA was deliberately excluded (2026-08 — cut it entirely, don't re-add
+without asking; it was also the single largest sidecar by far, ~212MB of
+the ~443MB installer).
 
 ## Dev setup
 
@@ -12,7 +17,6 @@ fetched/built from their own source repos instead):
 
 ```
 sidecars/VeroMass_Aligner.exe        <- veromass-aligner/dist/VeroMass_Aligner.exe
-sidecars/VOLTA.exe                   <- excalibar/dist/VOLTA.exe
 sidecars/MoleculeID_Processor.exe    <- build via PyInstaller from MoleculeID_Processor/
 sidecars/MGF_Extractor.exe           <- build via PyInstaller from mgf-extractor/
 sidecars/Phyto_CrossMatcher.exe      <- build via PyInstaller from phyto-crossmatcher/
@@ -47,5 +51,5 @@ Windows SmartScreen will warn on first run.
   rather than reimplementing auth/watch/commit — lower risk, same proven
   logic from the veromass-bridge project, just invoked by direct process
   spawn instead of OS URL-scheme dispatch.
-- `launch_tool` spawns any of the other four sidecars directly, surfaced via
+- `launch_tool` spawns any of the other three sidecars directly, surfaced via
   the "Desktop Tools" menu (desktop-app-only, hidden in the plain browser).

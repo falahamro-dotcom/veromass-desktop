@@ -5,7 +5,6 @@ fn sidecar_relative_path(tool: &str) -> Result<&'static str, String> {
   match tool {
     "aligner" => Ok("VeroMass_Aligner.exe"),
     "processor" => Ok("MoleculeID_Processor.exe"),
-    "volta" => Ok("VOLTA.exe"),
     "mgf_extractor" => Ok("MGF_Extractor.exe"),
     "phyto_crossmatcher" => Ok("Phyto_CrossMatcher.exe"),
     "bridge" => Ok("VeroMass_Bridge/VeroMass_Bridge.exe"),
