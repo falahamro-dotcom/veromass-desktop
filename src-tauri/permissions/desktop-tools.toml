@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-desktop-tools"
+description = "Allows launching local sidecar tools and the embedded Aligner run/commit flow."
+commands.allow = ["launch_tool", "run_alignment_embedded", "commit_job_embedded"]

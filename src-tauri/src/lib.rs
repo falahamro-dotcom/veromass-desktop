@@ -1,5 +1,6 @@
-use std::process::Command;
-use tauri::Manager;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
+use tauri::{Emitter, Manager};
 
 fn sidecar_relative_path(tool: &str) -> Result<&'static str, String> {
   match tool {
@@ -52,28 +53,121 @@ fn launch_tool(app: tauri::AppHandle, tool: String, env_vars: Option<std::collec
   Ok(())
 }
 
-// Replaces the old `veromass://job?workbench=...&job=...` OS-scheme dispatch
-// (Workbench.jsx used to construct that link and rely on Windows routing it
-// to a registered handler). Same downstream logic — VeroMass_Bridge.exe's
-// --scheme-launch flag still writes the pending-job hint, launches the
-// aligner, and ensures a background watch loop — just invoked directly by
-// the shell instead of through the OS's URL-scheme registry.
+// Embedded Aligner: replaces the earlier desktop-app "process_locally"
+// command (which spawned VeroMass_Bridge.exe --scheme-launch, opening the
+// aligner's own separate window — same as the browser fallback) with
+// running the exact same algorithm headlessly and showing progress
+// inside VeroMass Desktop's own UI." VeroMass_Aligner.py's --headless mode
+// (additive, does not touch a single line of the actual alignment
+// algorithm — see that file's HEADLESS ENTRY POINT section) prints one
+// JSON object per line to stdout; this just forwards each line as a Tauri
+// event so the frontend never needs to poll or parse process output itself.
 #[tauri::command]
-fn process_locally(app: tauri::AppHandle, workbench_id: String, job_id: String) -> Result<(), String> {
-  let exe_path = resolve_sidecar_path(&app, sidecar_relative_path("bridge")?)?;
-  let url = format!("veromass://job?workbench={workbench_id}&job={job_id}");
-  Command::new(&exe_path)
-    .arg("--scheme-launch")
-    .arg(url)
+fn run_alignment_embedded(
+  app: tauri::AppHandle,
+  folder: String,
+  out_dir: String,
+) -> Result<(), String> {
+  let exe_path = resolve_sidecar_path(&app, sidecar_relative_path("aligner")?)?;
+
+  let mut child = Command::new(&exe_path)
+    .arg("--headless")
+    .arg("--folder").arg(&folder)
+    .arg("--out").arg(&out_dir)
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
     .spawn()
-    .map_err(|e| format!("Failed to start Process Locally: {e}"))?;
+    .map_err(|e| format!("Failed to start alignment: {e}"))?;
+
+  let stdout = child.stdout.take().ok_or("No stdout handle on aligner child process")?;
+  let handle = app.clone();
+  std::thread::spawn(move || {
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+      // Each line is already a JSON object emitted by --headless — forward
+      // as-is under a single event name; the frontend switches on `type`.
+      let _ = handle.emit("align-event", line);
+    }
+    let _ = child.wait();
+  });
+
   Ok(())
+}
+
+// Reuses veromass-bridge's proven, tested mapping.py (via VeroMass_Bridge.exe
+// --build-payload — a pure, offline, no-auth utility mode, see bridge.py)
+// to turn aligned_features.xlsx into the commit body shape, then posts it
+// directly with reqwest using the access token the webview's OWN live
+// Supabase session already has (passed in from the frontend) — deliberately
+// does not go through veromass-bridge's separate browser-mediated login at
+// all for this path. The desktop app is already logged in; no reason to
+// log in twice.
+#[tauri::command]
+fn commit_job_embedded(
+  app: tauri::AppHandle,
+  job_id: String,
+  mode: String,
+  xlsx_path: String,
+  access_token: String,
+) -> Result<serde_json::Value, String> {
+  let bridge_exe = resolve_sidecar_path(&app, sidecar_relative_path("bridge")?)?;
+
+  let output = Command::new(&bridge_exe)
+    .arg("--build-payload").arg(&xlsx_path).arg(&mode)
+    .output()
+    .map_err(|e| format!("Failed to build commit payload: {e}"))?;
+
+  if !output.status.success() {
+    return Err(format!(
+      "build-payload failed: {}",
+      String::from_utf8_lossy(&output.stderr)
+    ));
+  }
+
+  let mode_body: serde_json::Value = serde_json::from_slice(&output.stdout)
+    .map_err(|e| format!("Could not parse payload JSON: {e}"))?;
+
+  let mut body = serde_json::Map::new();
+  body.insert("package_uuid".into(), serde_json::Value::String(uuid::Uuid::new_v4().to_string()));
+  if let serde_json::Value::Object(map) = mode_body {
+    body.extend(map);
+  }
+
+  let client = reqwest::blocking::Client::new();
+  let resp = client
+    .post(format!("https://moleculeid-api.onrender.com/api/jobs/{job_id}/commit"))
+    .bearer_auth(&access_token)
+    .json(&serde_json::Value::Object(body))
+    .send()
+    .map_err(|e| format!("Commit request failed: {e}"))?;
+
+  // Read as text first, not resp.json() directly — an error response (a
+  // timeout/proxy error page, an empty body, anything non-JSON) must still
+  // produce a useful message instead of "error decoding response body"
+  // hiding what actually went wrong. Same fallback api_client.py's
+  // _raise_for_detail() already uses on the Python side.
+  let status = resp.status();
+  let body_text = resp.text().map_err(|e| format!("Could not read response body: {e}"))?;
+
+  if !status.is_success() {
+    let detail = serde_json::from_str::<serde_json::Value>(&body_text)
+      .ok()
+      .and_then(|v| v.get("detail").cloned())
+      .map(|v| v.to_string())
+      .unwrap_or_else(|| body_text.clone());
+    return Err(format!("Commit failed ({status}): {detail}"));
+  }
+
+  serde_json::from_str(&body_text)
+    .map_err(|e| format!("Commit succeeded ({status}) but response wasn't valid JSON: {e} — body: {body_text}"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
-    .invoke_handler(tauri::generate_handler![launch_tool, process_locally])
+    .plugin(tauri_plugin_dialog::init())
+    .invoke_handler(tauri::generate_handler![
+      launch_tool, run_alignment_embedded, commit_job_embedded
+    ])
     .setup(|app| {
       if cfg!(debug_assertions) {
         app.handle().plugin(

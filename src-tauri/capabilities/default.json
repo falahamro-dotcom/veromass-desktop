@@ -12,6 +12,8 @@
     ]
   },
   "permissions": [
-    "core:default"
+    "core:default",
+    "allow-desktop-tools",
+    "dialog:allow-open"
   ]
 }
