@@ -173,17 +173,35 @@ fn commit_job_embedded(
 // run_alignment_embedded above, for a different sidecar/event name. MGF
 // Extractor's own --headless mode (MGF_Extractor.py, additive, mirrors the
 // Aligner's own headless convention) prints one JSON object per line.
+// folder XOR files, mirroring MGF_Extractor.py's own --folder/--file split:
+// folder scans a whole directory (standalone "just run the tool" flow,
+// Toolkit Phase 1), files runs an explicit list (job-attach flow, Phase 2 —
+// picking exactly one input file means exactly one deterministic output
+// file to attach, instead of whatever else happens to sit in that folder).
 #[tauri::command]
 fn run_mgf_extractor_embedded(
   app: tauri::AppHandle,
-  folder: String,
+  folder: Option<String>,
+  files: Option<Vec<String>>,
   out_dir: String,
 ) -> Result<(), String> {
   let exe_path = resolve_sidecar_path(&app, sidecar_relative_path("mgf_extractor")?)?;
 
-  let mut child = Command::new(&exe_path)
-    .arg("--headless")
-    .arg("--folder").arg(&folder)
+  if folder.is_some() == files.is_some() {
+    return Err("exactly one of folder or files is required".into());
+  }
+
+  let mut cmd = Command::new(&exe_path);
+  cmd.arg("--headless");
+  if let Some(f) = &folder {
+    cmd.arg("--folder").arg(f);
+  }
+  if let Some(fs) = &files {
+    for f in fs {
+      cmd.arg("--file").arg(f);
+    }
+  }
+  let mut child = cmd
     .arg("--out").arg(&out_dir)
     .stdout(Stdio::piped())
     .stderr(Stdio::piped())
