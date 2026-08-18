@@ -220,6 +220,75 @@ fn run_mgf_extractor_embedded(
   Ok(())
 }
 
+// Embedded Phyto CrossMatcher: same run-headless-and-stream pattern again,
+// third tool. Phyto_CrossMatcher.py's --headless takes a drug library file
+// and a plant-spectra folder (not a single file — a cross-match run is
+// inherently many-plants-vs-one-library), producing one report .xlsx.
+#[tauri::command]
+fn run_phyto_crossmatcher_embedded(
+  app: tauri::AppHandle,
+  drug: String,
+  plants: String,
+  out_dir: String,
+) -> Result<(), String> {
+  let exe_path = resolve_sidecar_path(&app, sidecar_relative_path("phyto_crossmatcher")?)?;
+
+  let mut child = Command::new(&exe_path)
+    .arg("--headless")
+    .arg("--drug").arg(&drug)
+    .arg("--plants").arg(&plants)
+    .arg("--out").arg(&out_dir)
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .map_err(|e| format!("Failed to start Phyto CrossMatcher: {e}"))?;
+
+  let stdout = child.stdout.take().ok_or("No stdout handle on phyto_crossmatcher child process")?;
+  let handle = app.clone();
+  std::thread::spawn(move || {
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+      let _ = handle.emit("phyto-crossmatch-event", line);
+    }
+    let _ = child.wait();
+  });
+
+  Ok(())
+}
+
+// Embedded MoleculeID Processor: fourth and last --headless tool. Takes a
+// compound library .xlsx and a folder of raw/mzML/mzXML/MGF files, produces
+// (when at least one compound matches) a compact master .xlsx summary.
+#[tauri::command]
+fn run_processor_embedded(
+  app: tauri::AppHandle,
+  excel: String,
+  folder: String,
+  out_dir: String,
+) -> Result<(), String> {
+  let exe_path = resolve_sidecar_path(&app, sidecar_relative_path("processor")?)?;
+
+  let mut child = Command::new(&exe_path)
+    .arg("--headless")
+    .arg("--excel").arg(&excel)
+    .arg("--folder").arg(&folder)
+    .arg("--out").arg(&out_dir)
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .map_err(|e| format!("Failed to start MoleculeID Processor: {e}"))?;
+
+  let stdout = child.stdout.take().ok_or("No stdout handle on processor child process")?;
+  let handle = app.clone();
+  std::thread::spawn(move || {
+    for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+      let _ = handle.emit("processor-event", line);
+    }
+    let _ = child.wait();
+  });
+
+  Ok(())
+}
+
 // Generic (tool-agnostic) job-attach for Toolkit Phase 2 tools that don't
 // go through commit_job_embedded's targeted/untargeted xlsx mapping — MGF
 // Extractor today, Phyto CrossMatcher/Processor once they get their own
@@ -325,7 +394,8 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     .invoke_handler(tauri::generate_handler![
       launch_tool, run_alignment_embedded, commit_job_embedded,
-      run_mgf_extractor_embedded, attach_artifact_and_complete
+      run_mgf_extractor_embedded, attach_artifact_and_complete,
+      run_phyto_crossmatcher_embedded, run_processor_embedded
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {
